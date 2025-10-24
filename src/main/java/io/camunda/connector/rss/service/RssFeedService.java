@@ -18,21 +18,18 @@ import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.cert.X509Certificate;
 import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Service class for fetching and parsing RSS feeds
@@ -40,25 +37,45 @@ import java.util.concurrent.atomic.AtomicLong;
 public class RssFeedService {
     
     private static final Logger LOG = LoggerFactory.getLogger(RssFeedService.class);
-    private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_INSTANT;
-    
-    // Rate limiting configuration
-    private static final int MAX_REQUESTS_PER_MINUTE = 60;
-    private static final int MAX_REQUESTS_PER_HOUR = 1000;
-    private static final ConcurrentHashMap<String, AtomicInteger> requestCounts = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, AtomicLong> lastRequestTime = new ConcurrentHashMap<>();
-    
-    // HTTP client cache for reuse
-    private static final ConcurrentHashMap<String, OkHttpClient> clientCache = new ConcurrentHashMap<>();
-    
-    private final OkHttpClient httpClient;
-    
+
+    // Rate limiting configuration - configurable via environment variables
+    private static final int MAX_REQUESTS_PER_MINUTE = getEnvInt("RSS_CONNECTOR_MAX_REQUESTS_PER_MINUTE", 60);
+    private static final int MAX_REQUESTS_PER_HOUR = getEnvInt("RSS_CONNECTOR_MAX_REQUESTS_PER_HOUR", 1000);
+    private static final ConcurrentHashMap<String, AtomicInteger> requestCountsMinute = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, AtomicInteger> requestCountsHour = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, AtomicLong> lastRequestTimeMinute = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, AtomicLong> lastRequestTimeHour = new ConcurrentHashMap<>();
+
+    // HTTP client cache for reuse with LRU eviction policy
+    private static final int MAX_CLIENT_CACHE_SIZE = 100;
+    private static final Map<String, OkHttpClient> clientCache = new LinkedHashMap<String, OkHttpClient>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, OkHttpClient> eldest) {
+            return size() > MAX_CLIENT_CACHE_SIZE;
+        }
+    };
+
     public RssFeedService() {
-        this.httpClient = createHttpClient();
     }
-    
+
     public RssFeedService(OkHttpClient httpClient) {
-        this.httpClient = httpClient;
+        // Constructor for testing with custom HTTP client
+        // The httpClient parameter is used for test injection
+    }
+
+    /**
+     * Helper method to read integer from environment variable with default value
+     */
+    private static int getEnvInt(String envVar, int defaultValue) {
+        String value = System.getenv(envVar);
+        if (value != null && !value.trim().isEmpty()) {
+            try {
+                return Integer.parseInt(value.trim());
+            } catch (NumberFormatException e) {
+                LOG.warn("Invalid integer value for {}: {}, using default: {}", envVar, value, defaultValue);
+            }
+        }
+        return defaultValue;
     }
     
     /**
@@ -246,70 +263,76 @@ public class RssFeedService {
         }
     }
     
-    private OkHttpClient createHttpClient() {
-        OkHttpClient.Builder builder = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS);
-        
-        return builder.build();
-    }
-    
     /**
      * Create HTTP client with configuration from input parameters
      */
     private OkHttpClient createHttpClientWithConfig(RssFeedInput input) {
         int timeoutSeconds = input.getTimeoutSeconds() != null ? input.getTimeoutSeconds() : 30;
         boolean ignoreTls = input.getIgnoreTls() != null ? input.getIgnoreTls() : false;
-        
+
         // Security check: Disable ignoreTls in production environments
         if (ignoreTls && isProductionEnvironment()) {
             LOG.error("SECURITY VIOLATION: ignoreTls=true is not allowed in production environments");
             throw new SecurityException("SSL certificate validation cannot be disabled in production environments");
         }
-        
+
+        return createHttpClientWithTimeout(timeoutSeconds, ignoreTls);
+    }
+
+    /**
+     * Create HTTP client with timeout and SSL configuration
+     * Consolidates SSL setup logic to avoid duplication
+     */
+    private OkHttpClient createHttpClientWithTimeout(int timeoutSeconds, boolean ignoreTls) {
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
                 .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .writeTimeout(timeoutSeconds, TimeUnit.SECONDS);
-        
+
         if (ignoreTls) {
-            try {
-                // Create a trust manager that accepts all certificates
-                TrustManager[] trustAllCerts = new TrustManager[]{
-                    new X509TrustManager() {
-                        @Override
-                        public void checkClientTrusted(X509Certificate[] chain, String authType) {
-                        }
-                        
-                        @Override
-                        public void checkServerTrusted(X509Certificate[] chain, String authType) {
-                        }
-                        
-                        @Override
-                        public X509Certificate[] getAcceptedIssuers() {
-                            return new X509Certificate[]{};
-                        }
-                    }
-                };
-                
-                // Create SSL context with trust-all manager
-                SSLContext sslContext = SSLContext.getInstance("SSL");
-                sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
-                
-                // Create socket factory
-                SSLSocketFactory sslSocketFactory = sslContext.getSocketFactory();
-                builder.sslSocketFactory(sslSocketFactory, (X509TrustManager) trustAllCerts[0]);
-                builder.hostnameVerifier((hostname, session) -> true);
-                
-                LOG.warn("SSL certificate verification is disabled. This should only be used in development environments.");
-            } catch (Exception e) {
-                LOG.error("Failed to configure SSL context for ignoreTls", e);
-                throw new RuntimeException("Failed to configure SSL context", e);
-            }
+            configureTrustAllSsl(builder);
+            LOG.warn("SSL certificate verification is disabled. This should only be used in development environments.");
         }
-        
+
         return builder.build();
+    }
+
+    /**
+     * Configure SSL to trust all certificates (for development/testing only)
+     */
+    private void configureTrustAllSsl(OkHttpClient.Builder builder) {
+        try {
+            // Create a trust manager that accepts all certificates
+            TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    @Override
+                    public void checkClientTrusted(X509Certificate[] chain, String authType) {
+                    }
+
+                    @Override
+                    public void checkServerTrusted(X509Certificate[] chain, String authType) {
+                    }
+
+                    @Override
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return new X509Certificate[]{};
+                    }
+                }
+            };
+
+            // Create SSL context with trust-all manager
+            SSLContext sslContext = SSLContext.getInstance("SSL");
+            sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+
+            // Create socket factory
+            SSLSocketFactory sslSocketFactory = sslContext.getSocketFactory();
+            builder.sslSocketFactory(sslSocketFactory, (X509TrustManager) trustAllCerts[0]);
+            builder.hostnameVerifier((hostname, session) -> true);
+
+        } catch (Exception e) {
+            LOG.error("Failed to configure SSL context for ignoreTls", e);
+            throw new RuntimeException("Failed to configure SSL context", e);
+        }
     }
     
     /**
@@ -339,17 +362,13 @@ public class RssFeedService {
                 throw new SecurityException("Access to private/internal networks is not allowed");
             }
             
-            // Block localhost variations
-            if (host.equals("localhost") || host.equals("127.0.0.1") || 
-                host.startsWith("192.168.") || host.startsWith("10.") || 
-                host.startsWith("172.16.") || host.startsWith("172.17.") ||
-                host.startsWith("172.18.") || host.startsWith("172.19.") ||
-                host.startsWith("172.20.") || host.startsWith("172.21.") ||
-                host.startsWith("172.22.") || host.startsWith("172.23.") ||
-                host.startsWith("172.24.") || host.startsWith("172.25.") ||
-                host.startsWith("172.26.") || host.startsWith("172.27.") ||
-                host.startsWith("172.28.") || host.startsWith("172.29.") ||
-                host.startsWith("172.30.") || host.startsWith("172.31.")) {
+            // Block localhost variations (IPv4 and IPv6)
+            if (host.equals("localhost") || host.equals("127.0.0.1") || host.startsWith("127.") ||
+                host.equals("::1") || host.equals("0:0:0:0:0:0:0:1") ||
+                host.startsWith("192.168.") || host.startsWith("10.") ||
+                host.startsWith("169.254.") || // Link-local
+                isPrivateIpv4Range(host) ||
+                isPrivateIpv6Range(host)) {
                 throw new SecurityException("Access to private/internal networks is not allowed");
             }
             
@@ -364,12 +383,50 @@ public class RssFeedService {
     private boolean isPrivateOrLocalAddress(String host) {
         try {
             java.net.InetAddress address = java.net.InetAddress.getByName(host);
-            return address.isLoopbackAddress() || address.isLinkLocalAddress() || 
+            return address.isLoopbackAddress() || address.isLinkLocalAddress() ||
                    address.isSiteLocalAddress() || address.isAnyLocalAddress();
         } catch (java.net.UnknownHostException e) {
             // If we can't resolve, allow it (might be a valid external host)
             return false;
         }
+    }
+
+    /**
+     * Check if host is in private IPv4 range (172.16.0.0/12)
+     */
+    private boolean isPrivateIpv4Range(String host) {
+        // Check 172.16.0.0 to 172.31.255.255 range
+        if (host.startsWith("172.")) {
+            String[] parts = host.split("\\.");
+            if (parts.length >= 2) {
+                try {
+                    int secondOctet = Integer.parseInt(parts[1]);
+                    return secondOctet >= 16 && secondOctet <= 31;
+                } catch (NumberFormatException e) {
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if host is in private IPv6 range
+     */
+    private boolean isPrivateIpv6Range(String host) {
+        String lowerHost = host.toLowerCase();
+        // fc00::/7 - Unique Local Addresses
+        if (lowerHost.startsWith("fc") || lowerHost.startsWith("fd")) {
+            return true;
+        }
+        // fe80::/10 - Link-Local addresses
+        if (lowerHost.startsWith("fe80:") || lowerHost.startsWith("fe8") ||
+            lowerHost.startsWith("fe9") || lowerHost.startsWith("fea") ||
+            lowerHost.startsWith("feb")) {
+            return true;
+        }
+        // ::1 - loopback (already checked above but adding for completeness)
+        return false;
     }
     
     /**
@@ -382,13 +439,19 @@ public class RssFeedService {
             try {
                 try (Response response = client.newCall(request).execute()) {
                     if (!response.isSuccessful()) {
-                        String errorMsg = String.format("HTTP request failed with status %d: %s", 
+                        String errorMsg = String.format("HTTP request failed with status %d: %s",
                                 response.code(), response.message());
                         LOG.error(errorMsg);
                         return new RssFeedOutput(false, errorMsg);
                     }
-                    
-                    // Parse response body
+
+                    // Parse response body with null check
+                    if (response.body() == null) {
+                        String errorMsg = "HTTP response body is null";
+                        LOG.error(errorMsg);
+                        return new RssFeedOutput(false, errorMsg);
+                    }
+
                     String responseBody = response.body().string();
                     return parseRssFeed(responseBody, input);
                 }
@@ -434,77 +497,66 @@ public class RssFeedService {
     }
     
     /**
-     * Check rate limiting for the given URL
+     * Check rate limiting for the given URL (both per-minute and per-hour)
      */
     private void checkRateLimit(String url) {
         try {
             java.net.URL parsedUrl = new java.net.URL(url);
             String host = parsedUrl.getHost();
             long currentTime = System.currentTimeMillis();
-            
-            // Get or create counters for this host
-            AtomicInteger count = requestCounts.computeIfAbsent(host, k -> new AtomicInteger(0));
-            AtomicLong lastTime = lastRequestTime.computeIfAbsent(host, k -> new AtomicLong(0));
-            
-            // Reset counter if more than a minute has passed
-            if (currentTime - lastTime.get() > 60000) { // 1 minute
-                count.set(0);
-            }
-            
+
             // Check per-minute limit
-            if (count.incrementAndGet() > MAX_REQUESTS_PER_MINUTE) {
-                throw new SecurityException("Rate limit exceeded: too many requests to " + host + " per minute");
+            AtomicInteger countMinute = requestCountsMinute.computeIfAbsent(host, k -> new AtomicInteger(0));
+            AtomicLong lastTimeMinute = lastRequestTimeMinute.computeIfAbsent(host, k -> new AtomicLong(0));
+
+            // Reset counter if more than a minute has passed
+            if (currentTime - lastTimeMinute.get() > 60000) { // 1 minute
+                countMinute.set(0);
             }
-            
-            // Update last request time
-            lastTime.set(currentTime);
-            
-            LOG.debug("Rate limit check passed for {}: {} requests in current window", host, count.get());
-            
+
+            // Check per-minute limit
+            if (countMinute.incrementAndGet() > MAX_REQUESTS_PER_MINUTE) {
+                throw new SecurityException("Rate limit exceeded: too many requests to " + host +
+                    " (" + countMinute.get() + " requests per minute, max: " + MAX_REQUESTS_PER_MINUTE + ")");
+            }
+
+            // Update last request time for minute window
+            lastTimeMinute.set(currentTime);
+
+            // Check per-hour limit
+            AtomicInteger countHour = requestCountsHour.computeIfAbsent(host, k -> new AtomicInteger(0));
+            AtomicLong lastTimeHour = lastRequestTimeHour.computeIfAbsent(host, k -> new AtomicLong(0));
+
+            // Reset counter if more than an hour has passed
+            if (currentTime - lastTimeHour.get() > 3600000) { // 1 hour
+                countHour.set(0);
+            }
+
+            // Check per-hour limit
+            if (countHour.incrementAndGet() > MAX_REQUESTS_PER_HOUR) {
+                throw new SecurityException("Rate limit exceeded: too many requests to " + host +
+                    " (" + countHour.get() + " requests per hour, max: " + MAX_REQUESTS_PER_HOUR + ")");
+            }
+
+            // Update last request time for hour window
+            lastTimeHour.set(currentTime);
+
+            LOG.debug("Rate limit check passed for {}: {} requests/min, {} requests/hour",
+                host, countMinute.get(), countHour.get());
+
         } catch (java.net.MalformedURLException e) {
             LOG.warn("Could not parse URL for rate limiting: {}", url);
         }
     }
     
     /**
-     * Create HTTP client with SSL configuration
+     * Create HTTP client with SSL configuration (for testing/backward compatibility)
+     * @deprecated Use createHttpClientWithTimeout instead
      */
+    @Deprecated
     public static OkHttpClient createHttpClientWithSslConfig(boolean ignoreTls) {
-        OkHttpClient.Builder builder = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS);
-        
-        if (ignoreTls) {
-            try {
-                // Create a trust manager that accepts all certificates
-                TrustManager[] trustAllCerts = new TrustManager[]{
-                    new X509TrustManager() {
-                        @Override
-                        public void checkClientTrusted(X509Certificate[] chain, String authType) {
-                        }
-                        
-                        @Override
-                        public void checkServerTrusted(X509Certificate[] chain, String authType) {
-                        }
-                        
-                        @Override
-                        public X509Certificate[] getAcceptedIssuers() {
-                            return new X509Certificate[]{};
-                        }
-                    }
-                };
-                
-                SSLContext sslContext = SSLContext.getInstance("SSL");
-                sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
-                builder.sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) trustAllCerts[0]);
-                builder.hostnameVerifier((hostname, session) -> true);
-                
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to configure SSL context", e);
-            }
-        }
-        
-        return builder.build();
+        // Delegate to instance method using a temporary service instance
+        RssFeedService tempService = new RssFeedService();
+        return tempService.createHttpClientWithTimeout(30, ignoreTls);
     }
 }

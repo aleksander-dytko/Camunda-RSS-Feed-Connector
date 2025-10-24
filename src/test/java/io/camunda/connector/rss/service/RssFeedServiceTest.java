@@ -12,11 +12,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class RssFeedServiceTest {
 
     private RssFeedService rssFeedService;
-    private OkHttpClient httpClient;
 
     @BeforeEach
     void setUp() {
-        httpClient = new OkHttpClient();
+        OkHttpClient httpClient = new OkHttpClient();
         rssFeedService = new RssFeedService(httpClient);
     }
 

@@ -1,18 +1,13 @@
 package io.camunda.connector.rss.integration;
 
 import io.camunda.connector.api.outbound.OutboundConnectorContext;
-import io.camunda.connector.api.outbound.JobContext;
 import io.camunda.connector.rss.RssFeedConnector;
 import io.camunda.connector.rss.dto.RssFeedInput;
 import io.camunda.connector.rss.dto.RssFeedOutput;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-
-import java.util.HashMap;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
@@ -25,14 +20,10 @@ import static org.mockito.Mockito.when;
 class RssFeedConnectorIntegrationTest {
 
     private final RssFeedConnector connector = new RssFeedConnector();
-    private final ObjectMapper objectMapper = new ObjectMapper();
-    
+
     @Mock
     private OutboundConnectorContext mockContext;
-    
-    @Mock
-    private JobContext mockJobContext;
-    
+
     public RssFeedConnectorIntegrationTest() {
         MockitoAnnotations.openMocks(this);
     }

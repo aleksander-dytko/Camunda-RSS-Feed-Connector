@@ -196,3 +196,54 @@ application-local.properties
 # Generated files
 generated/
 gen/
+
+# JaCoCo coverage files
+*.exec
+jacoco/
+jacoco.xml
+jacoco.csv
+
+# Maven Shade Plugin
+dependency-reduced-pom.xml
+
+# IntelliJ IDEA specific
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+atlassian-ide-plugin.xml
+com_crashlytics_export_strings.xml
+crashlytics.properties
+crashlytics-build.properties
+fabric.properties
+
+# Eclipse specific
+.metadata/
+.recommenders/
+
+# VSCode specific
+.history/
+*.code-workspace
+
+# macOS specific
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Test framework specific
+.testmondata
+
+# Build tool specific
+*.mvn/
+!/.mvn/wrapper/maven-wrapper.properties
+
+# Claude Code AI assistant
+.claude/
+
+# GitHub Copilot
+.github/copilot/
+
+# Temporary documentation/summary files
+FIXES_SUMMARY.md
+SECURITY_IMPROVEMENTS.md
