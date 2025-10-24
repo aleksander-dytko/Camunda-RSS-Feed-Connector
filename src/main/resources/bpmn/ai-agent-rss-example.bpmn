@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:camunda="http://camunda.org/schema/1.0/bpmn" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn" exporter="Camunda Modeler" exporterVersion="5.0.0" xsi:schemaLocation="http://www.omg.org/spec/BPMN/20100524/MODEL BPMN20.xsd http://camunda.org/schema/1.0/bpmn http://camunda.org/schema/1.0/bpmn/camunda-bpmn.xsd http://camunda.org/schema/zeebe/1.0 http://camunda.org/schema/1.0/zeebe/zeebe.xsd">
+  <bpmn:process id="AI_Agent_RSS_Workflow" name="AI Agent RSS Feed Monitoring" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1" name="Start RSS Monitoring">
+      <bpmn:outgoing>Flow_1</bpmn:outgoing>
+    </bpmn:startEvent>
+    
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="AI_Agent_Task" />
+    
+    <!-- AI Agent Task that can use RSS connector as a tool -->
+    <bpmn:serviceTask id="AI_Agent_Task" name="AI Agent with RSS Tool" camunda:type="external" camunda:topic="ai-agent">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="ai-agent" />
+        <zeebe:taskHeaders>
+          <zeebe:header key="tools" value="rss-feed-connector" />
+          <zeebe:header key="model" value="gpt-4" />
+          <zeebe:header key="instructions" value="Monitor RSS feeds and analyze content for relevant information" />
+        </zeebe:taskHeaders>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_1</bpmn:incoming>
+      <bpmn:outgoing>Flow_2</bpmn:outgoing>
+    </bpmn:serviceTask>
+    
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="AI_Agent_Task" targetRef="Gateway_1" />
+    
+    <!-- Decision gateway based on AI agent analysis -->
+    <bpmn:exclusiveGateway id="Gateway_1" name="Content Analysis Result">
+      <bpmn:incoming>Flow_2</bpmn:incoming>
+      <bpmn:outgoing>Flow_3</bpmn:outgoing>
+      <bpmn:outgoing>Flow_4</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    
+    <!-- RSS Feed Connector Task -->
+    <bpmn:serviceTask id="RSS_Feed_Task" name="Fetch RSS Feed" camunda:type="external" camunda:topic="rss-feed">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="rss-feed" />
+        <zeebe:taskHeaders>
+          <zeebe:header key="connector" value="io.camunda:rss-feed:1" />
+        </zeebe:taskHeaders>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_3</bpmn:incoming>
+      <bpmn:outgoing>Flow_5</bpmn:outgoing>
+    </bpmn:serviceTask>
+    
+    <bpmn:sequenceFlow id="Flow_3" name="Fetch RSS" sourceRef="Gateway_1" targetRef="RSS_Feed_Task">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=contains(analysisResult, "fetch_rss")</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    
+    <bpmn:sequenceFlow id="Flow_4" name="No Action Needed" sourceRef="Gateway_1" targetRef="EndEvent_1" />
+    
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="RSS_Feed_Task" targetRef="Process_RSS_Data" />
+    
+    <!-- Process the RSS data -->
+    <bpmn:serviceTask id="Process_RSS_Data" name="Process RSS Data" camunda:type="external" camunda:topic="data-processor">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="data-processor" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_5</bpmn:incoming>
+      <bpmn:outgoing>Flow_6</bpmn:outgoing>
+    </bpmn:serviceTask>
+    
+    <bpmn:sequenceFlow id="Flow_6" sourceRef="Process_RSS_Data" targetRef="EndEvent_1" />
+    
+    <bpmn:endEvent id="EndEvent_1" name="RSS Processing Complete">
+      <bpmn:incoming>Flow_4</bpmn:incoming>
+      <bpmn:incoming>Flow_6</bpmn:incoming>
+    </bpmn:endEvent>
+  </bpmn:process>
+  
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="AI_Agent_RSS_Workflow">
+      <bpmndi:BPMNShape id="_BPMNShape_StartEvent_2" bpmnElement="StartEvent_1">
+        <dc:Bounds x="152" y="102" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="140" y="145" width="60" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_AI_Agent_Task_di" bpmnElement="AI_Agent_Task">
+        <dc:Bounds x="240" y="80" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_1_di" bpmnElement="Gateway_1" isMarkerVisible="true">
+        <dc:Bounds x="395" y="95" width="50" height="50" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="400" y="70" width="40" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_RSS_Feed_Task_di" bpmnElement="RSS_Feed_Task">
+        <dc:Bounds x="500" y="80" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_Process_RSS_Data_di" bpmnElement="Process_RSS_Data">
+        <dc:Bounds x="650" y="80" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Event_EndEvent_1_di" bpmnElement="EndEvent_1">
+        <dc:Bounds x="802" y="102" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="790" y="145" width="60" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1">
+        <di:waypoint x="188" y="120" />
+        <di:waypoint x="240" y="120" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2">
+        <di:waypoint x="340" y="120" />
+        <di:waypoint x="395" y="120" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_3_di" bpmnElement="Flow_3">
+        <di:waypoint x="445" y="120" />
+        <di:waypoint x="500" y="120" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="460" y="102" width="20" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_4_di" bpmnElement="Flow_4">
+        <di:waypoint x="420" y="95" />
+        <di:waypoint x="420" y="50" />
+        <di:waypoint x="820" y="50" />
+        <di:waypoint x="820" y="102" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="600" y="32" width="40" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_5_di" bpmnElement="Flow_5">
+        <di:waypoint x="600" y="120" />
+        <di:waypoint x="650" y="120" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_6_di" bpmnElement="Flow_6">
+        <di:waypoint x="750" y="120" />
+        <di:waypoint x="802" y="120" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
